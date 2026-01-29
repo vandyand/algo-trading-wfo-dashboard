@@ -46,7 +46,7 @@ def main() -> None:
 
     # Load data (cached across reruns)
     @st.cache_data
-    def load_data():
+    def load_data(_version=2):
         return load_all_runs()
 
     df = load_data()
