@@ -1,0 +1,13 @@
+{
+  "adapter": "tcn-action-nq",
+  "cfg": {
+    "start": "1725-12-01",
+    "end": "1725-12-28",
+    "train_n": 24.0,
+    "val_n": 1.0,
+    "step_n": 1.0,
+    "unit": "days",
+    "base_gran": "M5",
+    "windows": 16
+  }
+}
