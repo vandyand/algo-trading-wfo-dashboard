@@ -13,9 +13,7 @@ DATA_DIR = Path(__file__).parent / "data"
 STRATEGY_LABELS = {
     "tcn-action-nq": "TCN Action (NQ)",
     "tcn-action-classifier": "TCN Classifier",
-    "tcn-scalar-threshold": "TCN Scalar",
     "mlp-action-classifier": "MLP Classifier",
-    "rule-action": "Rule-Based",
 }
 
 # Columns to extract from each window record
@@ -104,5 +102,16 @@ def load_all_runs() -> pd.DataFrame:
 
     # Sort by run and window number
     df = df.sort_values(["run_id", "window"]).reset_index(drop=True)
+
+    # Generate short display names: "TCN Classifier #1", "MLP Classifier #2", etc.
+    run_order = df.groupby("run_id").first().sort_index()
+    counters: Dict[str, int] = {}
+    display_names: Dict[str, str] = {}
+    for run_id, row in run_order.iterrows():
+        strategy = row["strategy"]
+        counters[strategy] = counters.get(strategy, 0) + 1
+        n_windows = len(df[df["run_id"] == run_id])
+        display_names[run_id] = f"{strategy} #{counters[strategy]} ({n_windows}w)"
+    df["display_name"] = df["run_id"].map(display_names)
 
     return df

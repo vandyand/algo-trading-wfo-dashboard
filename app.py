@@ -15,18 +15,14 @@ from data_loader import load_all_runs
 STRATEGY_COLORS = {
     "TCN Action (NQ)": "#4A90D9",
     "TCN Classifier": "#50C878",
-    "TCN Scalar": "#FFD700",
     "MLP Classifier": "#FF6B6B",
-    "Rule-Based": "#C084FC",
 }
 
 # Streamlit named colors for sidebar legend
 _STRATEGY_ST_COLORS = {
     "TCN Action (NQ)": "blue",
     "TCN Classifier": "green",
-    "TCN Scalar": "orange",
     "MLP Classifier": "red",
-    "Rule-Based": "violet",
 }
 
 
@@ -59,13 +55,19 @@ def main() -> None:
         st.error("No WFO data found in data/ directory.")
         return
 
-    run_ids = df["run_id"].unique().tolist()
+    # Build display name mapping
+    name_to_run = dict(zip(df["display_name"], df["run_id"]))
+    all_display_names = list(dict.fromkeys(df["display_name"]))  # preserve order, unique
 
     # --- Sidebar ---
     with st.sidebar:
         st.title("WFO Dashboard")
 
-        selected_run = st.selectbox("Select Run", run_ids, index=0)
+        selected_names = st.multiselect(
+            "Select Runs",
+            all_display_names,
+            default=all_display_names,
+        )
 
         st.divider()
 
@@ -84,13 +86,17 @@ def main() -> None:
             "This process repeats across the entire dataset, "
             "producing out-of-sample results that reflect real "
             "trading conditions.\n\n"
-            "**Models:** Temporal Convolutional Networks (TCN), "
-            "MLPs, and rule-based baselines trained on M5 candle "
-            "data with multi-timeframe features."
+            "**Models:** Temporal Convolutional Networks (TCN) "
+            "and MLPs trained on M5 candle data with "
+            "multi-timeframe features."
         )
         st.divider()
         st.markdown("[View Source on GitHub](https://github.com/vandyand/algo-trading-wfo-dashboard)")
         st.caption("Built with Streamlit + Plotly + Pandas")
+
+    # Resolve selected run IDs
+    selected_run_ids = [name_to_run[n] for n in selected_names if n in name_to_run]
+    df_selected = df[df["run_id"].isin(selected_run_ids)]
 
     # --- Header ---
     st.title("📈 Walk-Forward Optimization Dashboard")
@@ -100,11 +106,11 @@ def main() -> None:
     )
 
     # --- Section 1: Summary Metrics ---
-    total_runs = df["run_id"].nunique()
-    total_windows = len(df)
-    avg_sharpe = df["sharpe"].mean()
-    avg_win_rate = df["win_rate"].mean()
-    best_return = df["cum_return"].max()
+    total_runs = df_selected["run_id"].nunique()
+    total_windows = len(df_selected)
+    avg_sharpe = df_selected["sharpe"].mean()
+    avg_win_rate = df_selected["win_rate"].mean()
+    best_return = df_selected["cum_return"].max()
 
     cols = st.columns(5)
     cols[0].metric("Total Runs", total_runs)
@@ -115,25 +121,28 @@ def main() -> None:
 
     st.divider()
 
-    # --- Section 2: Equity Curve ---
-    st.subheader("Equity Curve — Out-of-Sample Performance")
-
-    df_run = df[df["run_id"] == selected_run].copy()
-    run_strategy = df_run["strategy"].iloc[0] if len(df_run) > 0 else "Unknown"
-
-    equity_df = compute_equity_curve(df_run)
-    color = STRATEGY_COLORS.get(run_strategy, "#4A90D9")
+    # --- Section 2: Equity Curves ---
+    st.subheader("Equity Curves — Out-of-Sample Performance")
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=equity_df["window"],
-        y=equity_df["equity"],
-        mode="lines+markers",
-        line=dict(color=color, width=2),
-        marker=dict(size=5),
-        name=run_strategy,
-        hovertemplate="Window %{x}<br>Equity: %{y:.4f}<extra></extra>",
-    ))
+    for run_id in selected_run_ids:
+        df_run = df[df["run_id"] == run_id].copy()
+        if df_run.empty:
+            continue
+        run_strategy = df_run["strategy"].iloc[0]
+        display_name = df_run["display_name"].iloc[0]
+        equity_df = compute_equity_curve(df_run)
+        color = STRATEGY_COLORS.get(run_strategy, "#888888")
+
+        fig.add_trace(go.Scatter(
+            x=equity_df["window"],
+            y=equity_df["equity"],
+            mode="lines+markers",
+            line=dict(color=color, width=2),
+            marker=dict(size=4),
+            name=display_name,
+            hovertemplate=f"{display_name}<br>Window %{{x}}<br>Equity: %{{y:.4f}}<extra></extra>",
+        ))
     fig.add_hline(y=1.0, line_dash="dash", line_color="gray", opacity=0.5)
     fig.update_layout(
         xaxis_title="Validation Window",
@@ -141,17 +150,16 @@ def main() -> None:
         template="plotly_dark",
         height=400,
         margin=dict(l=40, r=20, t=20, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     st.plotly_chart(fig, use_container_width=True)
-
-    st.caption(f"**{selected_run}** — Strategy: {run_strategy} — {len(df_run)} windows")
 
     st.divider()
 
     # --- Section 3: Strategy Comparison ---
     st.subheader("Strategy Comparison")
 
-    strategy_agg = df.groupby("strategy").agg(
+    strategy_agg = df_selected.groupby("strategy").agg(
         runs=("run_id", "nunique"),
         windows=("window", "count"),
         mean_sharpe=("sharpe", "mean"),
@@ -178,41 +186,52 @@ def main() -> None:
     st.divider()
 
     # --- Section 4: Per-Window Metrics ---
-    st.subheader("Per-Window Performance — Selected Run")
+    st.subheader("Per-Window Performance")
 
-    metric_choice = st.radio(
-        "Metric", ["Cumulative Return", "Sharpe Ratio", "Win Rate"],
-        horizontal=True,
-    )
+    if not selected_names:
+        st.info("Select at least one run to view per-window metrics.")
+    else:
+        detail_name = st.selectbox("Detail View", selected_names)
+        detail_run_id = name_to_run.get(detail_name)
+        df_detail = df[df["run_id"] == detail_run_id].copy() if detail_run_id else pd.DataFrame()
 
-    metric_col = {
-        "Cumulative Return": "cum_return",
-        "Sharpe Ratio": "sharpe",
-        "Win Rate": "win_rate",
-    }[metric_choice]
+        if not df_detail.empty:
+            detail_strategy = df_detail["strategy"].iloc[0]
+            detail_color = STRATEGY_COLORS.get(detail_strategy, "#888888")
 
-    fig2 = px.bar(
-        df_run,
-        x="window",
-        y=metric_col,
-        color_discrete_sequence=[color],
-        labels={"window": "Validation Window", metric_col: metric_choice},
-        template="plotly_dark",
-    )
-    fig2.update_layout(
-        height=350,
-        margin=dict(l=40, r=20, t=20, b=40),
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+            metric_choice = st.radio(
+                "Metric", ["Cumulative Return", "Sharpe Ratio", "Win Rate"],
+                horizontal=True,
+            )
 
-    # Raw data expander
-    with st.expander("Raw Window Data"):
-        st.dataframe(
-            df_run[["window", "cum_return", "sharpe", "sortino", "max_dd",
-                     "trades", "win_rate", "profit_factor"]].reset_index(drop=True),
-            use_container_width=True,
-            hide_index=True,
-        )
+            metric_col = {
+                "Cumulative Return": "cum_return",
+                "Sharpe Ratio": "sharpe",
+                "Win Rate": "win_rate",
+            }[metric_choice]
+
+            fig2 = px.bar(
+                df_detail,
+                x="window",
+                y=metric_col,
+                color_discrete_sequence=[detail_color],
+                labels={"window": "Validation Window", metric_col: metric_choice},
+                template="plotly_dark",
+            )
+            fig2.update_layout(
+                height=350,
+                margin=dict(l=40, r=20, t=20, b=40),
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+            # Raw data expander
+            with st.expander("Raw Window Data"):
+                st.dataframe(
+                    df_detail[["window", "cum_return", "sharpe", "sortino", "max_dd",
+                               "trades", "win_rate", "profit_factor"]].reset_index(drop=True),
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
 
 if __name__ == "__main__":
